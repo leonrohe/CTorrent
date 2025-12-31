@@ -5,9 +5,36 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
+
 static BNode* bencode_parse_any(FILE* f);
 
-static void bencode_free(BNode* node) {};
+static void bencode_free(BNode* node) {
+    if(!node) return;
+
+    switch (node->type)
+    {
+        case BDICT:
+            for(size_t i = 0; i < node->value.bdict.len; ++i) {
+                free(node->value.bdict.keys[i].data);
+                bencode_free(node->value.bdict.values[i]);
+            }
+            free(node->value.bdict.keys);
+            free(node->value.bdict.values);
+            break;
+        case BLIST:
+            for(size_t i = 0; i < node->value.blist.len; ++i) {
+                bencode_free(node->value.blist.items[i]);
+            }
+            free(node->value.blist.items);
+            break;
+        case BSTRING:
+            free(node->value.bstring.data);
+            break;
+        case BINT:
+            break;
+    }
+    free(node);
+};
 
 static BNode* bencode_parse_string(FILE* f) {
     BNode* result = NULL;
@@ -260,6 +287,7 @@ static BNode* bencode_parse_any(FILE* f) {
             return bencode_parse_string(f);
     }
 }
+
 
 BNode* bencode_parse_torrent(const char* fpath) {
     FILE* f = fopen(fpath, "rb");
