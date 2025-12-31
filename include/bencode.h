@@ -24,7 +24,8 @@ typedef enum BTYPE {
 typedef struct BNode BNode;
 
 typedef struct BString {
-    size_t  len;
+    size_t  pre_delim_len;
+    size_t  post_delim_len;
     char*   data;
 } BString;
 
@@ -40,6 +41,7 @@ typedef struct BList {
 } BList;
 
 typedef struct BInt {
+    size_t len;
     long long value;
 } BInt;
 
@@ -53,12 +55,19 @@ struct BNode {
     } value;
 };
 
+typedef struct BEncodeBuf {
+    size_t len;
+    char* data;
+} BEncodeBuf;
+
 /**
  * Parse a torrent file and return the root BNode.
  * @param fpath Path to the torrent file
  * @return Pointer to the root BNode, or NULL on error
  */
 BNode* bencode_parse_torrent(const char* fpath);
+
+BEncodeBuf* bencode_encode_node(const BNode* node);
 
 /**
  * Print the Contents of the BNode recursively.

@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
+#pragma region Decoding
 
 static void bencode_free(BNode* node) {
     if(!node) return;
@@ -34,15 +35,16 @@ static void bencode_free(BNode* node) {
     free(node);
 };
 
-static BNode* bencode_parse_any(FILE* f);
+static BNode* bencode_decode_any(FILE* f);
 
-static BNode* bencode_parse_string(FILE* f) {
+static BNode* bencode_decode_string(FILE* f) {
     BNode* result = NULL;
     char* str_data = NULL;
     
     if(!f) goto cleanup;
 
     // read in Length of encoded string
+    size_t len_buf_size = 0;
     bool found_delim = false;
     char str_len_buf[BENC_MAX_LOOKAHEAD] = {0};    
     for(size_t i = 0; i < BENC_MAX_LOOKAHEAD-1; i++) {
@@ -55,6 +57,7 @@ static BNode* bencode_parse_string(FILE* f) {
         if(c < '0' || c > '9') goto cleanup;
 
         str_len_buf[i] = c;
+        len_buf_size++;
     }
     if(!found_delim) goto cleanup;
     
@@ -75,7 +78,7 @@ static BNode* bencode_parse_string(FILE* f) {
     if(!result) goto cleanup;
 
     result->type = BSTRING;
-    result->value.bstring = (BString){ .len = len, .data = str_data };
+    result->value.bstring = (BString){ .pre_delim_len = len_buf_size, .post_delim_len = len, .data = str_data };
 
     // return the valid BNode
     return result;
@@ -86,7 +89,7 @@ cleanup:
     return NULL;
 }
 
-static BNode* bencode_parse_dict(FILE* f) {
+static BNode* bencode_decode_dict(FILE* f) {
     BNode* result = NULL;
     BString* keys = NULL;
     BNode** values = NULL;
@@ -104,10 +107,10 @@ static BNode* bencode_parse_dict(FILE* f) {
         if(c == BENC_TERMINATOR) break;
         ungetc(c, f);
 
-        BNode* key_node = bencode_parse_string(f);
+        BNode* key_node = bencode_decode_string(f);
         if(!key_node) goto cleanup;
 
-        BNode* value_node = bencode_parse_any(f);
+        BNode* value_node = bencode_decode_any(f);
         if(!value_node) {
             bencode_free(key_node);
             goto cleanup;
@@ -167,7 +170,7 @@ cleanup:
     return NULL;
 }
 
-static BNode* bencode_parse_list(FILE* f) {
+static BNode* bencode_decode_list(FILE* f) {
     BNode* result = NULL;
     BNode** items = NULL;
     size_t capacity = 0;
@@ -184,7 +187,7 @@ static BNode* bencode_parse_list(FILE* f) {
         if(c == BENC_TERMINATOR) break;
         ungetc(c, f);
 
-        BNode* item = bencode_parse_any(f);
+        BNode* item = bencode_decode_any(f);
         if(!item) goto cleanup;
 
         // grow array if needed
@@ -223,13 +226,14 @@ cleanup:
     return NULL;
 }
 
-static BNode* bencode_parse_int(FILE* f) {
+static BNode* bencode_decode_int(FILE* f) {
     BNode* result = NULL;
     
     if(!f) goto cleanup;
     if(fgetc(f) != BENC_INT_START) goto cleanup;
 
     // read in integer string
+    size_t buf_size = 0;
     bool found_terminator = false;
     char integer_buf[BENC_MAX_LOOKAHEAD] = {0};
     for(size_t i = 0; i < BENC_MAX_LOOKAHEAD-1; i++) {
@@ -241,6 +245,7 @@ static BNode* bencode_parse_int(FILE* f) {
         }
 
         integer_buf[i] = c;
+        buf_size++;
     }
     if(!found_terminator) goto cleanup;
     if(integer_buf[0] == '0' && integer_buf[1] != '\0') goto cleanup;
@@ -256,7 +261,7 @@ static BNode* bencode_parse_int(FILE* f) {
     if(!result) goto cleanup;
 
     result->type = BINT;
-    result->value.bint = (BInt){.value = value};
+    result->value.bint = (BInt){.len = buf_size, .value = value};
 
     // return valid BNode
     return result;
@@ -265,7 +270,7 @@ cleanup:
     return NULL;
 }
 
-static BNode* bencode_parse_any(FILE* f) {
+static BNode* bencode_decode_any(FILE* f) {
     if(!f) return NULL;
     
     int c = fgetc(f);
@@ -274,28 +279,165 @@ static BNode* bencode_parse_any(FILE* f) {
 
     switch (c) {
         case BENC_DICT_START:
-            return bencode_parse_dict(f);
+            return bencode_decode_dict(f);
         
         case BENC_LIST_START:
-            return bencode_parse_list(f);
+            return bencode_decode_list(f);
 
         case BENC_INT_START:
-            return bencode_parse_int(f);
+            return bencode_decode_int(f);
 
         default:
-            return bencode_parse_string(f);
+            return bencode_decode_string(f);
     }
 }
 
+#pragma endregion Decoding
+
+#pragma region Encoding
+
+static size_t bencode_get_encoded_size(const BNode* node) {
+    size_t result = 0;
+    
+    switch (node->type)
+    {
+        case BDICT:
+            for(size_t i = 0; i < node->value.bdict.len; ++i) {
+                const BString key = node->value.bdict.keys[i];
+                result += key.pre_delim_len;                        // chars before ':'
+                result += 1;                                        // ':'
+                result += key.post_delim_len;                       // chars after ':'
+
+                const BNode* value = node->value.bdict.values[i];
+                result += bencode_get_encoded_size(value);
+            }
+            result += 2;                                            // 'd' and 'e'
+            break;
+        case BLIST:
+            for(size_t i = 0; i < node->value.blist.len; ++i) {
+                const BNode* item = node->value.blist.items[i];
+                result += bencode_get_encoded_size(item);           // encoded size of child
+            }
+            result += 2;                                            // 'l' and 'e'
+            break;
+        case BSTRING:
+            result += node->value.bstring.pre_delim_len;            // chars before ':'
+            result += 1;                                            // ':'
+            result += node->value.bstring.post_delim_len;           // chars after ':'
+            break;
+        case BINT:
+            result += node->value.bint.len;                         // digits of bint + possible '-'
+            result += 2;                                            // 'i' and 'e'
+            break;
+    }
+    
+    return result;
+}
+
+/**
+ * Write the BEncoded BNode to the given buffer. This function assumes the buffer is already allocated to the right size.
+ * @param node The BNode to BEncode.
+ * @param buffer The buffer the BEncoded BNode is written to.
+ * @param buffer_size The pre allocated size of the buffer. Used for bounds checks.
+ * @param offset The current offset into the buffer.
+ * @return Returns the offset into the buffer after finishing the write of the current Node
+ */
+static size_t bencode_write_node_to_buffer(const BNode* node, char* buffer, size_t buffer_size, size_t offset) { // (TODO) Error handling
+    if(offset > buffer_size) return 0;
+    if(!node) return offset;
+
+    size_t current_offset = offset;
+    
+    int written;
+    switch (node->type) {
+        case BDICT:
+            buffer[current_offset++] = 'd';
+            for(size_t i = 0; i < node->value.bdict.len; ++i) {
+                // encode key
+                BString key = node->value.bdict.keys[i];
+                written = snprintf(buffer + current_offset,
+                                    buffer_size - current_offset,
+                                    "%zu",
+                                    key.post_delim_len);
+                current_offset += written;
+                buffer[current_offset++] = ':';
+                memcpy(buffer + current_offset,
+                        key.data,
+                        key.post_delim_len);
+                current_offset += key.post_delim_len;
+                
+                // encode value
+                current_offset = bencode_write_node_to_buffer(node->value.bdict.values[i], buffer, buffer_size, current_offset);
+            }
+            buffer[current_offset++] = 'e';
+            break;
+        case BLIST:
+            buffer[current_offset++] = 'l';
+            for(size_t i = 0; i < node->value.blist.len; ++i) {
+                current_offset = bencode_write_node_to_buffer(node->value.blist.items[i], buffer, buffer_size, current_offset);
+            }
+            buffer[current_offset++] = 'e';
+            break;
+        case BSTRING:
+            written = snprintf(buffer + current_offset,
+                                buffer_size - current_offset,
+                                "%zu",
+                                node->value.bstring.post_delim_len);
+            current_offset += written;
+            buffer[current_offset++] = ':';
+            memcpy(buffer + current_offset,
+                    node->value.bstring.data,
+                    node->value.bstring.post_delim_len);
+            current_offset += node->value.bstring.post_delim_len;
+            break;
+        case BINT:
+            buffer[current_offset++] = 'i';
+            written = snprintf(buffer + current_offset, 
+                                buffer_size - current_offset,
+                                "%lld", 
+                                node->value.bint.value);
+            current_offset += written;
+            buffer[current_offset++] = 'e';
+            break;
+    }
+    return current_offset;
+}
+
+#pragma endregion Encoding
+
+#pragma region Public
 
 BNode* bencode_parse_torrent(const char* fpath) {
     FILE* f = fopen(fpath, "rb");
     if(!f) return NULL;
 
-    BNode* root = bencode_parse_dict(f);
+    BNode* root = bencode_decode_dict(f);
 
     fclose(f);
     return root;
+}
+
+BEncodeBuf* bencode_encode_node(const BNode* node) {
+    BEncodeBuf* result = NULL;
+    
+    size_t encoded_size = bencode_get_encoded_size(node);
+    
+    char* encoded_data = malloc(encoded_size);
+    if(!encoded_data) goto cleanup;
+    bencode_write_node_to_buffer(node, encoded_data, encoded_size, 0);
+
+    result = malloc(sizeof(*result));
+    if(!result) goto cleanup;
+
+    result->len = encoded_size;
+    result->data = encoded_data;
+
+    return result;
+
+cleanup:
+    free(encoded_data);
+    free(result);
+    return NULL;
 }
 
 void bencode_print_recursive(const BNode* node, size_t indent) {
@@ -305,18 +447,21 @@ void bencode_print_recursive(const BNode* node, size_t indent) {
 
     switch (node->type) {
     case BSTRING:
-        if(node->value.bstring.len >= 100) { //assume binary blob
+        if(node->value.bstring.post_delim_len >= 100) { //assume binary blob
             printf("<blob>...</blob>\n");
         } else {
-            printf("String: %zu, %.*s\n",
-                node->value.bstring.len,
-                (int)node->value.bstring.len,
+            printf("String: %zu, %zu, %.*s\n",
+                node->value.bstring.pre_delim_len,
+                node->value.bstring.post_delim_len,
+                (int)node->value.bstring.post_delim_len,
                 node->value.bstring.data);
         }
         break;
 
     case BINT:
-        printf("Integer: %ld\n", node->value.bint.value);
+        printf("Integer: %zu, %ld\n", 
+            node->value.bint.len,
+            node->value.bint.value);
         break;
 
     case BLIST:
@@ -334,9 +479,11 @@ void bencode_print_recursive(const BNode* node, size_t indent) {
             const BNode* value = node->value.bdict.values[i];
             
             printf("%*s", (int)indent+BENC_PRINT_INDENT, "");
-            printf("%.*s:\n", (int)key.len, key.data);
+            printf("%.*s:\n", (int)key.post_delim_len, key.data);
             bencode_print_recursive(value, indent+2*BENC_PRINT_INDENT);
         }
         break;
     }
 }
+
+#pragma endregion Public
