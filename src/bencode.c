@@ -297,8 +297,9 @@ static BNode* bencode_decode_any(FILE* f) {
 #pragma region Encoding
 
 static size_t bencode_get_encoded_size(const BNode* node) {
-    size_t result = 0;
+    if(!node) return 0;
     
+    size_t result = 0;
     switch (node->type)
     {
         case BDICT:
@@ -334,73 +335,66 @@ static size_t bencode_get_encoded_size(const BNode* node) {
     return result;
 }
 
-/**
- * Write the BEncoded BNode to the given buffer. This function assumes the buffer is already allocated to the right size.
- * @param node The BNode to BEncode.
- * @param buffer The buffer the BEncoded BNode is written to.
- * @param buffer_size The pre allocated size of the buffer. Used for bounds checks.
- * @param offset The current offset into the buffer.
- * @return Returns the offset into the buffer after finishing the write of the current Node
- */
-static size_t bencode_write_node_to_buffer(const BNode* node, char* buffer, size_t buffer_size, size_t offset) { // (TODO) Error handling
-    if(offset > buffer_size) return 0;
-    if(!node) return offset;
+static size_t bencode_encode_any_to_buffer(const BNode* node, char* buffer);
 
-    size_t current_offset = offset;
+static size_t bencode_encode_string_to_buffer(const BString* string, char* buffer) { // (TODO) Error handling
+    if(!buffer) return 0;
+
+    int written = snprintf(buffer, 32, "%zu:", string->post_delim_len);
+    memcpy(buffer + written, string->data, string->post_delim_len);
     
-    int written;
-    switch (node->type) {
-        case BDICT:
-            buffer[current_offset++] = 'd';
-            for(size_t i = 0; i < node->value.bdict.len; ++i) {
-                // encode key
-                BString key = node->value.bdict.keys[i];
-                written = snprintf(buffer + current_offset,
-                                    buffer_size - current_offset,
-                                    "%zu",
-                                    key.post_delim_len);
-                current_offset += written;
-                buffer[current_offset++] = ':';
-                memcpy(buffer + current_offset,
-                        key.data,
-                        key.post_delim_len);
-                current_offset += key.post_delim_len;
-                
-                // encode value
-                current_offset = bencode_write_node_to_buffer(node->value.bdict.values[i], buffer, buffer_size, current_offset);
-            }
-            buffer[current_offset++] = 'e';
-            break;
-        case BLIST:
-            buffer[current_offset++] = 'l';
-            for(size_t i = 0; i < node->value.blist.len; ++i) {
-                current_offset = bencode_write_node_to_buffer(node->value.blist.items[i], buffer, buffer_size, current_offset);
-            }
-            buffer[current_offset++] = 'e';
-            break;
-        case BSTRING:
-            written = snprintf(buffer + current_offset,
-                                buffer_size - current_offset,
-                                "%zu",
-                                node->value.bstring.post_delim_len);
-            current_offset += written;
-            buffer[current_offset++] = ':';
-            memcpy(buffer + current_offset,
-                    node->value.bstring.data,
-                    node->value.bstring.post_delim_len);
-            current_offset += node->value.bstring.post_delim_len;
-            break;
-        case BINT:
-            buffer[current_offset++] = 'i';
-            written = snprintf(buffer + current_offset, 
-                                buffer_size - current_offset,
-                                "%lld", 
-                                node->value.bint.value);
-            current_offset += written;
-            buffer[current_offset++] = 'e';
-            break;
+    return written + string->post_delim_len;
+}
+
+static size_t bencode_encode_int_to_buffer(const BInt* integer, char* buffer) { // (TODO) Error handling
+    if(!buffer) return 0;
+
+    int written = snprintf(buffer, 32, "i%llde", integer->value);
+    
+    return written;
+}
+
+static size_t bencode_encode_dict_to_buffer(const BDict* dict, char* buffer) { // (TODO) Error handling
+    if(!buffer) return 0;
+
+    size_t current_offset = 0;
+
+    *(buffer+current_offset++) = 'd';
+    for(size_t i = 0; i < dict->len; ++i) {
+        current_offset += bencode_encode_string_to_buffer(&dict->keys[i], buffer + current_offset);
+        current_offset += bencode_encode_any_to_buffer(dict->values[i], buffer + current_offset);
     }
+    *(buffer+current_offset++) = 'e';
+
     return current_offset;
+}
+
+static size_t bencode_encode_list_to_buffer(const BList* list, char* buffer) { // (TODO) Error handling
+    if(!buffer) return 0;
+
+    size_t current_offset = 0;
+
+    *(buffer+current_offset++) = 'l';
+    for(size_t i = 0; i < list->len; ++i) {
+        current_offset += bencode_encode_any_to_buffer(list->items[i], buffer + current_offset);
+    }
+    *(buffer+current_offset++) = 'e';
+
+    return current_offset;
+}
+
+static size_t bencode_encode_any_to_buffer(const BNode* node, char* buffer) { // (TODO) Error handling
+    switch (node->type)
+    {
+        case BDICT:
+            return bencode_encode_dict_to_buffer(&node->value.bdict, buffer);
+        case BLIST:
+            return bencode_encode_list_to_buffer(&node->value.blist, buffer);
+        case BSTRING:
+            return bencode_encode_string_to_buffer(&node->value.bstring, buffer);
+        case BINT:
+            return bencode_encode_int_to_buffer(&node->value.bint, buffer);
+    }
 }
 
 #pragma endregion Encoding
@@ -424,7 +418,7 @@ BEncodeBuf* bencode_encode_node(const BNode* node) {
     
     char* encoded_data = malloc(encoded_size);
     if(!encoded_data) goto cleanup;
-    bencode_write_node_to_buffer(node, encoded_data, encoded_size, 0);
+    bencode_encode_any_to_buffer(node, encoded_data);
 
     result = malloc(sizeof(*result));
     if(!result) goto cleanup;
