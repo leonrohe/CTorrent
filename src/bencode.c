@@ -6,8 +6,6 @@
 #include <stdlib.h>
 
 
-static BNode* bencode_parse_any(FILE* f);
-
 static void bencode_free(BNode* node) {
     if(!node) return;
 
@@ -35,6 +33,8 @@ static void bencode_free(BNode* node) {
     }
     free(node);
 };
+
+static BNode* bencode_parse_any(FILE* f);
 
 static BNode* bencode_parse_string(FILE* f) {
     BNode* result = NULL;
@@ -100,7 +100,6 @@ static BNode* bencode_parse_dict(FILE* f) {
     int c;
     while(1) {
         c = fgetc(f);
-        printf("Read in CHAR: %ld\n", c);
         if(c == EOF) goto cleanup;
         if(c == BENC_TERMINATOR) break;
         ungetc(c, f);
