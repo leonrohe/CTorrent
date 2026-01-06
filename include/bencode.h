@@ -60,12 +60,18 @@ typedef struct BEncodeBuf {
     char* data;
 } BEncodeBuf;
 
+void bencode_free_node(BNode* node);
+
 /**
  * Parse a torrent file and return the root BNode.
  * @param fpath Path to the torrent file
  * @return Pointer to the root BNode, or NULL on error
  */
 BNode* bencode_parse_torrent(const char* fpath);
+
+BNode* bencode_find_node_by_key(const BNode* dict, const char* key);
+
+void bencode_free_buf(BEncodeBuf* buffer);
 
 BEncodeBuf* bencode_encode_node(const BNode* node);
 

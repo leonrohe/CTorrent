@@ -9,23 +9,18 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // BNode* torrent = bencode_parse_torrent(argv[1]);
-    // bencode_print_recursive(torrent, 0);
-
-    // // DEBUG write to file
-    // BEncodeBuf* encoded = bencode_encode_node(torrent);
-    // FILE* f = fopen("out.bin", "wb");
-    // fwrite(encoded->data, 1, encoded->len, f);
-    // fclose(f);
-    // free(encoded->data);
-    // free(encoded);
-
-    // sha1hash empty = sha1((const uint8_t*)"", 0);
-    // print_sha1(empty);
-    // sha1hash abc = sha1((const uint8_t*)"abc", 3);
-    // print_sha1(abc);
-    // sha1hash fox = sha1((const uint8_t*)"The quick brown fox jumps over the lazy dog", 43);
-    // print_sha1(fox);
+    BNode* root = bencode_parse_torrent(argv[1]);
+    BEncodeBuf* info_buf = bencode_encode_node(
+        bencode_find_node_by_key(root, "info")
+    );
+    sha1hash info_hash = sha1(
+        (const uint8_t*)info_buf->data,
+        info_buf->len
+    );
+    bencode_free_node(root);
+    bencode_free_buf(info_buf);
+    
+    print_sha1(info_hash);
 
     return 0;
 }

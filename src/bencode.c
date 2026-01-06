@@ -7,7 +7,7 @@
 
 #pragma region Decoding
 
-static void bencode_free(BNode* node) {
+void bencode_free_node(BNode* node) {
     if(!node) return;
 
     switch (node->type)
@@ -15,14 +15,14 @@ static void bencode_free(BNode* node) {
         case BDICT:
             for(size_t i = 0; i < node->value.bdict.len; ++i) {
                 free(node->value.bdict.keys[i].data);
-                bencode_free(node->value.bdict.values[i]);
+                bencode_free_node(node->value.bdict.values[i]);
             }
             free(node->value.bdict.keys);
             free(node->value.bdict.values);
             break;
         case BLIST:
             for(size_t i = 0; i < node->value.blist.len; ++i) {
-                bencode_free(node->value.blist.items[i]);
+                bencode_free_node(node->value.blist.items[i]);
             }
             free(node->value.blist.items);
             break;
@@ -112,7 +112,7 @@ static BNode* bencode_decode_dict(FILE* f) {
 
         BNode* value_node = bencode_decode_any(f);
         if(!value_node) {
-            bencode_free(key_node);
+            bencode_free_node(key_node);
             goto cleanup;
         }
 
@@ -121,16 +121,16 @@ static BNode* bencode_decode_dict(FILE* f) {
             
             BString* new_keys = realloc(keys, new_cap*sizeof(BString));
             if(!new_keys) {
-                bencode_free(key_node);
-                bencode_free(value_node);
+                bencode_free_node(key_node);
+                bencode_free_node(value_node);
                 goto cleanup;
             }
             keys = new_keys;
             
             BNode** new_values = realloc(values, new_cap*sizeof(BNode*));
             if(!new_values) {
-                bencode_free(key_node);
-                bencode_free(value_node);
+                bencode_free_node(key_node);
+                bencode_free_node(value_node);
                 goto cleanup;
             }
             values = new_values;
@@ -162,7 +162,7 @@ cleanup:
     }
     if(values) {
         for(size_t i = 0; i < len; i++) {
-            bencode_free(values[i]);  // Free each value node
+            bencode_free_node(values[i]);  // Free each value node
         }
         free(values);
     }
@@ -195,7 +195,7 @@ static BNode* bencode_decode_list(FILE* f) {
             size_t new_cap = capacity == 0 ? 8 : capacity * 2;
             BNode** new_items = realloc(items, new_cap*sizeof(BNode*));
             if(!new_items) {
-                bencode_free(item);
+                bencode_free_node(item);
                 goto cleanup;
             }
             items = new_items;
@@ -218,7 +218,7 @@ static BNode* bencode_decode_list(FILE* f) {
 cleanup:
     if(items) {
         for(size_t i = 0; i < len; i++) {
-            bencode_free(items[i]);
+            bencode_free_node(items[i]);
         }
         free(items);
     }
@@ -295,6 +295,11 @@ static BNode* bencode_decode_any(FILE* f) {
 #pragma endregion Decoding
 
 #pragma region Encoding
+
+void bencode_free_buf(BEncodeBuf* buffer) {
+    free(buffer->data);
+    free(buffer);
+}
 
 static size_t bencode_get_encoded_size(const BNode* node) {
     if(!node) return 0;
@@ -398,6 +403,23 @@ static size_t bencode_encode_any_to_buffer(const BNode* node, char* buffer) { //
 }
 
 #pragma endregion Encoding
+
+#pragma region Traversal
+BNode* bencode_find_node_by_key(const BNode* dict, const char* key) {
+    if(dict->type != BDICT) return NULL;
+
+    for(size_t i = 0; i < dict->value.bdict.len; ++i) {
+        BString dict_key = dict->value.bdict.keys[i];
+        
+        if(strlen(key) != dict_key.post_delim_len) continue;
+
+        if(strncmp(dict_key.data, key, dict_key.post_delim_len) == 0)
+            return dict->value.bdict.values[i];
+    }
+
+    return NULL;
+}
+#pragma endregion Traversal
 
 #pragma region Public
 
